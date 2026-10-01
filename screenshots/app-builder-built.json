@@ -1,0 +1,41 @@
+{
+  "url": "http://127.0.0.1:8081/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Elite Tips",
+      "hasCanvas": false,
+      "bodyTextLen": 1344,
+      "bodyTextHash": "75342e8b4208a5c2275ca4dea55fdc50296867cf37b6e4860f9ad1b491f98836",
+      "bodyTextPrefix": "Elite Tips Perth 3:13 am · just now Book Watch Scan 15 min · 5 1",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Elite Tips",
+      "hasCanvas": false,
+      "bodyTextLen": 447,
+      "bodyTextHash": "ea7b97119bb42fa9a458ccb3415f8ba0188052412c36b3ec6e9e3491c607ab65",
+      "bodyTextPrefix": "Elite Tips Perth 3:13 am · just now Book Watch 15 min Hour Card ",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-built.json",
+  "divergesFromBaseline": true,
+  "baselineReasons": [
+    "desktop: body text changed (1805 -> 1344 chars, hash mismatch)",
+    "mobile: body text changed (569 -> 447 chars, hash mismatch)"
+  ]
+}

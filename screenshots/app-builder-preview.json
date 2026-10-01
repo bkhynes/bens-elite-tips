@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Elite Tips",
+      "hasCanvas": false,
+      "bodyTextLen": 1805,
+      "bodyTextHash": "b33a65d46f7dca9593d04949f67b413f0bcc07a6b728a62671aa55ce606ef158",
+      "bodyTextPrefix": "Elite Tips Perth 3:12 am · just now Book Watch Scan 15 min · 6 1",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Elite Tips",
+      "hasCanvas": false,
+      "bodyTextLen": 569,
+      "bodyTextHash": "78418db74e24dc24610a164f2877e0d00da83ed6292dca24090fefbfa40f9f80",
+      "bodyTextPrefix": "Elite Tips Perth 3:12 am · 7s ago Book Watch 15 min Hour Card Al",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}
