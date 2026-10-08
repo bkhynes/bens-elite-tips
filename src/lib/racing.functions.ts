@@ -149,6 +149,114 @@ function asResearch(text: string): RaceResearch | null {
   };
 }
 
+
+async function researchFromWeb(data: NonNullable<ReturnType<typeof compactRace>>): Promise<RaceResearch> {
+  const active = data.runners.filter((r) => !r.scratched);
+  const names = active.map((r) => r.name).filter(Boolean);
+  const query = [data.venue, `race ${data.raceNumber}`, data.category, "tips", names.slice(0, 3).join(" ")]
+    .filter(Boolean)
+    .join(" ");
+  const sources: RaceResearch["sources"] = [];
+  const hits: string[] = [];
+  try {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; BensEliteTips/1.0)" },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const blocks = html.split('class="result').slice(1, 8);
+      for (const block of blocks) {
+        const title = decode(block.match(/class="result__a"[^>]*>(.*?)<\/a>/s)?.[1] ?? "");
+        const snippet = decode(block.match(/class="result__snippet"[^>]*>(.*?)<\/(?:a|td|div)>/s)?.[1] ?? "");
+        const blob = `${title} ${snippet}`;
+        if (!blob.trim()) continue;
+        const mentioned = names.filter((name) => blob.toLowerCase().includes(name.toLowerCase()));
+        if (!mentioned.length && !blob.toLowerCase().includes(data.venue.toLowerCase())) continue;
+        const host = (block.match(/uddg=([^&"]+)/)?.[1] ?? "").toLowerCase();
+        const name = /racenet/.test(host)
+          ? "Racenet"
+          : /punters/.test(host)
+            ? "Punters"
+            : /racingandsports|racing-and-sports/.test(host)
+              ? "Racing and Sports"
+              : /justhorse/.test(host)
+                ? "Just Horse Racing"
+                : title.slice(0, 42) || "Search result";
+        sources.push({ name, selection: mentioned[0] ?? snippet.slice(0, 80) });
+        hits.push(blob);
+        if (sources.length >= 4) break;
+      }
+    }
+  } catch {
+    // search failed; fall through to a card-only read
+  }
+
+  const counts = new Map<string, number>();
+  for (const blob of hits) {
+    for (const runner of active) {
+      if (blob.toLowerCase().includes(runner.name.toLowerCase())) {
+        counts.set(runner.name, (counts.get(runner.name) ?? 0) + 1);
+      }
+    }
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const top = ranked[0];
+  const runner = top ? active.find((r) => r.name === top[0]) : undefined;
+  const verified = sources.length >= 2 && runner;
+  const ranking = verified
+    ? ranked
+        .map(([name]) => active.find((r) => r.name === name)?.number)
+        .filter((n): n is number => typeof n === "number")
+    : active.slice().sort((a, b) => (a.sportsbet ?? 999) - (b.sportsbet ?? 999)).map((r) => r.number).slice(0, 4);
+
+  if (!verified) {
+    return {
+      noBet: true,
+      pickNumber: null,
+      pickName: null,
+      confidence: "low",
+      sources: sources.slice(0, 4),
+      consensus: sources.length
+        ? "Outside pages came back, but not two that clearly discuss this race."
+        : "No independent tip page could be checked for this race.",
+      synthesis: "No bet. The card read still stands. This pass did not invent a tipster or a price.",
+      reasons: ["Outside research ran without a live model key, so only pages that name this race count."],
+      concerns: ["Fewer than two verified sources."],
+      ranking,
+      cardOnly: true,
+    };
+  }
+
+  return {
+    noBet: false,
+    pickNumber: runner.number,
+    pickName: runner.name,
+    confidence: top[1] >= 3 ? "medium" : "low",
+    sources: sources.slice(0, 4),
+    consensus: `${runner.name} is the name showing up most on the pages that mention this race.`,
+    synthesis: `Outside pages lean ${runner.name}. Sportsbet ${runner.sportsbet ?? "—"} is the price that matters. Still your bet.`,
+    reasons: [`Named on ${top[1]} result${top[1] === 1 ? "" : "s"}.`],
+    concerns: ["This is a page match, not a sectional or a steward read."],
+    ranking,
+    cardOnly: false,
+  };
+}
+
+function decode(value: string) {
+  return value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&/g, "&")
+    .replace(/"/g, '"')
+    .replace(/&#39;|'/g, "'")
+    .replace(/</g, "<")
+    .replace(/>/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export const researchRace = createServerFn({ method: "POST" })
   .validator((input: unknown) => compactRace(input))
   .handler(async ({ data }) => {
@@ -166,7 +274,12 @@ export const researchRace = createServerFn({ method: "POST" })
       };
     }
     const apiKey = process.env.XAI_API_KEY;
-    if (!apiKey) return { ok: false as const, error: "Research is unavailable right now." };
+    if (!apiKey) {
+      const research = await researchFromWeb(data);
+      researchHits.push(now);
+      researchCache.set(data.id, { at: now, research });
+      return { ok: true as const, cached: false, research };
+    }
 
     const card = {
       venue: data.venue,
