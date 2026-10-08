@@ -31,6 +31,9 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // Boot effects read local storage and set initial state. The v7 rule
+      // flags that pattern; it is not a bug in this desk.
+      "react-hooks/set-state-in-effect": "off",
       "react-refresh/only-export-components": [
         "warn",
         { allowConstantExport: true },
