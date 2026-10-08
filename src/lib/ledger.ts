@@ -1,5 +1,6 @@
 import type { Race } from "@/lib/racing-types";
 import type { EliteRead, ModelNote } from "@/lib/elite-model";
+import { reviewTip, type LessonCode } from "@/lib/lessons";
 
 export type Outcome = "pending" | "won" | "lost" | "void";
 
@@ -46,6 +47,8 @@ export type Suggestion = {
   placings: Placing[];
   missReason: string | null;
   nextTime: string | null;
+  lessonCode: LessonCode | null;
+  resultNote: string | null;
   feed: FeedResult | null;
 };
 
@@ -161,6 +164,18 @@ export function asSuggestion(v: unknown): Suggestion | null {
     placings,
     missReason: str(o.missReason),
     nextTime: str(o.nextTime),
+    lessonCode:
+      o.lessonCode === "won" ||
+      o.lessonCode === "placed" ||
+      o.lessonCode === "short_agreement" ||
+      o.lessonCode === "value_vs_favourite" ||
+      o.lessonCode === "agreement_lost" ||
+      o.lessonCode === "missed_winner" ||
+      o.lessonCode === "close_card" ||
+      o.lessonCode === "unclassified"
+        ? o.lessonCode
+        : null,
+    resultNote: str(o.resultNote),
     feed,
   };
 }
@@ -248,93 +263,13 @@ export function capturePicks(entries: Suggestion[], races: Race[], reads: EliteR
       placings: [],
       missReason: null,
       nextTime: null,
+      lessonCode: null,
+      resultNote: null,
       feed: null,
     };
     next = [suggestion, ...next].slice(0, LEDGER_MAX);
   }
   return next;
-}
-
-function concernLine(concerns: string[]): string {
-  const hit = concerns.find((c) => /short price|wide|two minutes/i.test(c));
-  if (!hit) return "";
-  if (/short price/i.test(hit)) return " The card had already said the price was short.";
-  if (/wide/i.test(hit)) return " The card had already flagged the draw as wide.";
-  return " The Sportsbet quote was already old when the call was logged.";
-}
-
-export function reviewMiss(entry: Pick<
-  Suggestion,
-  | "tag"
-  | "pickName"
-  | "pickNumber"
-  | "price"
-  | "favouriteName"
-  | "favouriteNumber"
-  | "favouritePrice"
-  | "ranking"
-  | "concerns"
-  | "winnerName"
-  | "winnerNumber"
-  | "pickPosition"
->): { reason: string; nextTime: string } {
-  const pos = entry.pickPosition;
-  const winner = entry.winnerName ?? (entry.winnerNumber != null ? `#${entry.winnerNumber}` : "Something else");
-  const price = entry.price != null ? `$${entry.price.toFixed(2)}` : "the price on the card";
-  const fav =
-    entry.favouriteName != null
-      ? `${entry.favouriteName}${entry.favouritePrice != null ? ` at $${entry.favouritePrice.toFixed(2)}` : ""}`
-      : "the favourite";
-  const winnerIsFav = entry.winnerNumber != null && entry.winnerNumber === entry.favouriteNumber;
-  const winnerInOrder = entry.winnerNumber != null && entry.ranking.includes(entry.winnerNumber);
-  const note = concernLine(entry.concerns);
-  const place = pos === 2 ? "second" : pos === 3 ? "third" : pos === 4 ? "fourth" : null;
-
-  if (place) {
-    return {
-      reason: `${entry.pickName} finished ${place}. ${winner} won. It was in the finish, but this is a win call and a placing doesn't pay.${note}`,
-      nextTime:
-        entry.price != null && entry.price < 2.2
-          ? "A short price that only places still loses the stake. Pass when a concern is already on the card."
-          : winnerInOrder
-            ? "The winner was already in the order, so the top of the card wasn't separated enough. Call no bet when the first two are close."
-            : "A placing isn't a win. The one that won wasn't in the order, so this should have been a no bet.",
-    };
-  }
-
-  if (entry.tag === "value" && winnerIsFav) {
-    return {
-      reason: `Took ${entry.pickName} at ${price} against ${fav}, and the favourite won. Form-over-price didn't beat the market.${note}`,
-      nextTime:
-        "Don't take a value runner against a short favourite unless the form gap is obvious and the price is $3.00 or bigger. Otherwise it's a no bet.",
-    };
-  }
-
-  if (entry.tag === "agreement") {
-    return {
-      reason: `Agreed with the market on ${entry.pickName} at ${price}, and it lost. ${winner} won. Matching the favourite is not the same as the favourite being a bet.${note}`,
-      nextTime: "Agreement on its own isn't enough, especially under $2.20 or when a concern is already listed. Leave those.",
-    };
-  }
-
-  if (!winnerInOrder && entry.winnerNumber != null) {
-    return {
-      reason: `${winner} wasn't in the card order${entry.ranking.length ? ` (${entry.ranking.join(" → ")})` : ""}. The form and price read missed the one that ran.${note}`,
-      nextTime: "If the figures are thin or the field is split, this should have been a no bet instead of a name.",
-    };
-  }
-
-  if (winnerInOrder) {
-    return {
-      reason: `${winner} was in the order, behind ${entry.pickName}. The right area, the wrong name on top.${note}`,
-      nextTime: "When the top two on the card are close, call no bet instead of forcing the first name.",
-    };
-  }
-
-  return {
-    reason: `${entry.pickName} at ${price} didn't win. ${winner} did.${note}`,
-    nextTime: "Pass next time unless the price and the form point at the same runner, with a gap over the next one.",
-  };
 }
 
 function settle(entry: Suggestion, feed: FeedResult, source: "feed" | "manual", manualNumber?: number): Suggestion {
@@ -381,6 +316,8 @@ function settle(entry: Suggestion, feed: FeedResult, source: "feed" | "manual", 
       placings: feed.placings,
       missReason: null,
       nextTime: null,
+      lessonCode: null,
+      resultNote: null,
     };
   }
 
@@ -389,15 +326,13 @@ function settle(entry: Suggestion, feed: FeedResult, source: "feed" | "manual", 
   }
 
   const outcome: Outcome = won ? "won" : "lost";
-  const review =
-    outcome === "lost"
-      ? reviewMiss({
-          ...entry,
-          winnerNumber,
-          winnerName,
-          pickPosition,
-        })
-      : null;
+  const review = reviewTip({
+    ...entry,
+    outcome,
+    winnerNumber,
+    winnerName,
+    pickPosition,
+  });
 
   return {
     ...entry,
@@ -409,8 +344,10 @@ function settle(entry: Suggestion, feed: FeedResult, source: "feed" | "manual", 
     winnerName,
     pickPosition,
     placings: feed.placings.length ? feed.placings : entry.placings,
-    missReason: review?.reason ?? null,
+    missReason: outcome === "lost" ? (review?.resultNote ?? null) : null,
     nextTime: review?.nextTime ?? null,
+    lessonCode: review?.lessonCode ?? null,
+    resultNote: review?.resultNote ?? null,
   };
 }
 
@@ -436,6 +373,7 @@ export function applyFeed(entry: Suggestion, feed: FeedResult): Suggestion {
     entry.winnerNumber === next.winnerNumber &&
     entry.pickPosition === next.pickPosition &&
     entry.missReason === next.missReason &&
+    entry.lessonCode === next.lessonCode &&
     sameFeed(entry.feed, feed)
   ) {
     return entry;
@@ -484,6 +422,8 @@ export function clearManual(entry: Suggestion): Suggestion {
       placings: [],
       missReason: null,
       nextTime: null,
+      lessonCode: null,
+      resultNote: null,
     };
   }
   return settle({ ...entry, resultSource: null }, entry.feed, "feed");

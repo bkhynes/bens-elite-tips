@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { Bookmark, ChevronDown, ChevronLeft, ClipboardList, Clock, Filter, Hourglass, RefreshCw, Search, TriangleAlert } from "lucide-react";
 import { readRace, readsInWindow, type EliteRead } from "@/lib/elite-model";
+import { policyFrom } from "@/lib/lessons";
 import {
   applyFeed,
   awaitingResult,
@@ -11,6 +13,7 @@ import {
   loadPhase,
   markWinner,
   mergeHistory,
+  profitOf,
   saveLedger,
   savePhase,
   setStake,
@@ -20,8 +23,10 @@ import {
 } from "@/lib/ledger";
 import { loadBoard, loadResults, raceToResearchInput, researchRace } from "@/lib/racing.functions";
 import { listSuggestions, saveSuggestions } from "@/lib/suggestions.functions";
+import { loadRecord } from "@/lib/record.functions";
 import type { Board, Race, RaceResearch, Runner } from "@/lib/racing-types";
 import { RecordPane, StakeFields } from "@/components/record-pane";
+import { loadBank, saveBank, sizedStakes, weekBook, type WeekBook } from "@/lib/bank";
 
 type Horizon = "15" | "60" | "all";
 type Code = "all" | "horse" | "harness" | "greyhound";
@@ -135,6 +140,9 @@ export function RacingDesk({ initial }: { initial: Board }) {
   const [watch, setWatch] = useState<Watch[]>([]);
   const [ledger, setLedger] = useState<Suggestion[]>([]);
   const [phaseStartedAt, setPhaseStartedAt] = useState(() => new Date().toISOString());
+  const [bankAmount, setBankAmount] = useState<number | null>(null);
+  const [strike, setStrike] = useState<number | null>(null);
+  const [decided, setDecided] = useState(0);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [research, setResearch] = useState<Record<string, RaceResearch | { error: string }>>({});
@@ -149,6 +157,7 @@ export function RacingDesk({ initial }: { initial: Board }) {
     ledgerRef.current = loaded;
     setLedger(loaded);
     setPhaseStartedAt(loadPhase(loaded));
+    setBankAmount(loadBank(Date.now()));
     booted.current = true;
     setNow(Date.now());
     const tick = setInterval(() => setNow(Date.now()), 1000);
@@ -176,6 +185,40 @@ export function RacingDesk({ initial }: { initial: Board }) {
     return () => {
       stop = true;
       clearInterval(tick);
+    };
+  }, []);
+
+  useEffect(() => {
+    let stop = false;
+    const pull = () => {
+      void loadRecord()
+        .then((record) => {
+          if (stop) return;
+          setStrike(record.strike);
+          setDecided(record.won + record.lost);
+          const { entries, push } = mergeHistory(ledgerRef.current, record.suggestions);
+          const same =
+            entries.length === ledgerRef.current.length &&
+            entries.every(
+              (entry, index) =>
+                entry.raceId === ledgerRef.current[index]?.raceId &&
+                entry.stake === ledgerRef.current[index]?.stake &&
+                suggestionStamp(entry) === suggestionStamp(ledgerRef.current[index]),
+            );
+          if (!same) {
+            ledgerRef.current = entries;
+            saveLedger(entries);
+            setLedger(entries);
+          }
+          if (push.length) pushSuggestions(push);
+        })
+        .catch(() => undefined);
+    };
+    pull();
+    const timer = setInterval(pull, 60_000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
     };
   }, []);
 
@@ -210,7 +253,15 @@ export function RacingDesk({ initial }: { initial: Board }) {
   const races = board.races.filter((r) => (code === "all" ? true : r.category === code) && within(r, horizon, clock));
   const upcoming = races.find((race) => new Date(race.startTime).getTime() - clock > -30_000) ?? races[0] ?? null;
   const selected = board.races.find((r) => r.id === selectedId) ?? upcoming;
-  const windowReads = useMemo(() => readsInWindow(board.races, clock), [board.races, clock]);
+  const policy = useMemo(() => policyFrom(ledger), [ledger]);
+  const bank = useMemo(() => {
+    const bets = ledger.flatMap((entry) => {
+      if (entry.stake == null || entry.stake <= 0) return [];
+      return [{ at: entry.loggedAt, stake: entry.stake, state: entry.outcome, profit: profitOf(entry) ?? 0 }];
+    });
+    return weekBook(clock, bankAmount, bets);
+  }, [ledger, bankAmount, clock]);
+  const windowReads = useMemo(() => readsInWindow(board.races, clock, policy), [board.races, clock, policy]);
   const windowCount = windowReads.length;
   const emptyBoard = board.races.length === 0;
   const showBoot = emptyBoard && refreshing;
@@ -386,6 +437,16 @@ export function RacingDesk({ initial }: { initial: Board }) {
               </span>
             </p>
           </div>
+          <Link
+            to="/record"
+            aria-label={decided ? `${Math.round((strike ?? 0) * 100)} percent of suggestions won` : "Suggestions record"}
+            className="press shrink-0 rounded-full border border-line bg-surface px-3 py-1 text-right"
+          >
+            <p className="font-display text-xl leading-none text-gold tabular-nums">
+              {strike == null ? "—" : `${Math.round(strike * 100)}%`}
+            </p>
+            <p className="text-xs text-muted">won</p>
+          </Link>
           <button
             type="button"
             onClick={() => setMobilePane(showRecord ? "list" : "record")}
@@ -584,6 +645,11 @@ export function RacingDesk({ initial }: { initial: Board }) {
                   .catch(() => setCheckError("Couldn't check results. You can still mark a winner."))
                   .finally(() => setChecking(false));
               }}
+              bank={bank}
+              onBank={(amount) => {
+                setBankAmount(amount);
+                saveBank(Date.now(), amount);
+              }}
             />
           ) : showWatch ? (
             <WatchList
@@ -610,7 +676,7 @@ export function RacingDesk({ initial }: { initial: Board }) {
               key={selected.id}
               race={selected}
               now={clock}
-              read={readRace(selected, clock)}
+              read={readRace(selected, clock, policy)}
               openRunner={shownOpen}
               setOpenRunner={toggleRunner}
               watch={watch}
@@ -620,6 +686,7 @@ export function RacingDesk({ initial }: { initial: Board }) {
               researching={researching === selected.id}
               onResearch={() => void researchSelected(selected)}
               bookEntry={bookEntry}
+              bank={bank}
               onStake={(stake, priceTaken) => {
                 if (!bookEntry) return;
                 updateEntry(bookEntry.raceId, (entry) => setStake(entry, stake, priceTaken));
@@ -890,6 +957,7 @@ function RacePane({
   researching,
   onResearch,
   bookEntry,
+  bank,
   onStake,
   onOpenBook,
 }: {
@@ -905,6 +973,7 @@ function RacePane({
   researching: boolean;
   onResearch: () => void;
   bookEntry: Suggestion | undefined;
+  bank: WeekBook;
   onStake: (stake: number | null, priceTaken: number | null) => void;
   onOpenBook: () => void;
 }) {
@@ -937,16 +1006,26 @@ function RacePane({
       </p>
       {race.scratchings.length ? <p className="mt-2 text-sm text-muted">Scratched: {race.scratchings.join(", ")}</p> : null}
 
-      <EliteBlock read={read} />
+      <EliteBlock read={read} bank={bank} />
+      <SameRaceBlock read={read} bank={bank} />
       {bookEntry ? (
         <div className="mt-3 rounded-xl border border-line bg-surface px-4 py-3">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm text-muted">Suggested and stored. Add a stake only if you bet it.</p>
+            <p className="text-sm text-muted">
+              {bank.stopped
+                ? "The week is done. Leave the stake blank."
+                : bank.unit
+                  ? `Suggested and stored. The week unit is $${bank.unit.toFixed(2)}.`
+                  : "Suggested and stored. Add a stake only if you bet it."}
+            </p>
             <button type="button" onClick={onOpenBook} className="press h-11 shrink-0 text-sm text-gold">
               Open book
             </button>
           </div>
           <StakeFields entry={bookEntry} onCommit={onStake} />
+          {bank.unit != null && bookEntry.stake != null && bookEntry.stake > bank.unit + 0.001 ? (
+            <p className="mt-2 text-sm">That stake is over this week's unit of ${bank.unit.toFixed(2)}.</p>
+          ) : null}
         </div>
       ) : null}
 
@@ -1092,7 +1171,79 @@ function RunnerName({ race, runner }: { race: Race; runner: Runner }) {
   );
 }
 
-function EliteBlock({ read }: { read: EliteRead }) {
+function SameRaceBlock({ read, bank }: { read: EliteRead; bank: WeekBook }) {
+  const card = read.sameRace;
+  if (!card || card.multis.length === 0) return null;
+  return (
+    <div className="mt-4 rounded-xl border border-line bg-surface p-4">
+      <p className="text-sm tracking-wide text-gold uppercase">Same race</p>
+      <p className="mt-2 text-sm text-pretty">{card.verdictText}</p>
+      <ol className="mt-3 flex flex-col">
+        {card.multis.map((multi, index) => (
+          <li key={multi.id} className="border-t border-line py-3">
+            <p className="text-sm text-muted">
+              {index + 1} of {card.multis.length}
+              {index === 0 ? " · lowest chance" : ""}
+              {index === card.multis.length - 1 ? " · highest chance" : ""}
+            </p>
+            <p className="mt-1 font-display text-xl leading-tight">{multi.line}</p>
+            <p className="mt-1 text-sm text-muted">
+              {multi.legs.map((leg) => `#${leg.number} ${leg.name}`).join(" · ")}
+            </p>
+            <p className="mt-1 text-sm">
+              <span className="text-gold tabular-nums">{chanceLabel(multi.chance)} chance</span>
+              <span className="text-muted"> · about ${multi.payout.toFixed(2)} if it lands</span>
+            </p>
+            <p className="mt-1 text-sm text-pretty text-muted">{multi.detail}</p>
+          </li>
+        ))}
+      </ol>
+      {card.strategies.length ? (
+        <div className="mt-1 border-t border-line pt-3">
+          <p className="text-sm tracking-wide text-gold uppercase">Higher payout, with a cover</p>
+          <ul className="mt-2 flex flex-col gap-4">
+            {card.strategies.map((plan) => (
+              <li key={plan.id}>
+                <p className="text-sm">{plan.name}</p>
+                <p className="mt-2 text-sm text-muted">Play</p>
+                <p className="font-display text-xl leading-tight">{plan.play.line}</p>
+                <p className="mt-1 text-sm">
+                  <span className="text-gold tabular-nums">{chanceLabel(plan.play.chance)} chance</span>
+                  <span className="text-muted"> · about ${plan.play.payout.toFixed(2)}</span>
+                </p>
+                <p className="mt-2 text-sm text-muted">Cover</p>
+                <p className="font-display text-xl leading-tight">{plan.cover.line}</p>
+                <p className="mt-1 text-sm">
+                  <span className="text-gold tabular-nums">{chanceLabel(plan.cover.chance)} chance</span>
+                  <span className="text-muted"> · about ${plan.cover.payout.toFixed(2)}</span>
+                </p>
+                <p className="mt-2 text-sm text-pretty text-muted">{stakeNote(plan, bank)}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <p className="text-sm text-pretty text-muted">
+        Written the way Sportsbet lists a same race multi. Chance and payout are estimated from the card, not a Sportsbet quote.
+      </p>
+    </div>
+  );
+}
+
+function chanceLabel(chance: number) {
+  if (chance >= 0.1) return `${Math.round(chance * 100)}%`;
+  return `${Math.round(chance * 1000) / 10}%`;
+}
+
+function stakeNote(plan: { coverPerTen: number; note: string }, bank: WeekBook) {
+  if (bank.amount == null || bank.unit == null) return plan.note;
+  if (bank.stopped) return "This week's bank is done. The line stays on the card, but there is no stake until Monday.";
+  const stakes = sizedStakes(bank.unit, plan.coverPerTen);
+  const left = bank.left == null ? null : Math.max(0, Math.round((bank.left - stakes.outlay) * 100) / 100);
+  return `Week unit $${bank.unit.toFixed(2)}. Put $${stakes.play.toFixed(2)} on the play and $${stakes.cover.toFixed(2)} on the cover. If both miss, $${stakes.outlay.toFixed(2)} is gone${left == null ? "" : ` and $${left.toFixed(2)} of the week is left`}. If only the cover lands, the stake comes back.`;
+}
+
+function EliteBlock({ read, bank }: { read: EliteRead; bank: WeekBook }) {
   if (!read.inWindow && read.minutes > 15) {
     return (
       <div className="mt-4 rounded-xl border border-line bg-surface p-4">
@@ -1111,6 +1262,7 @@ function EliteBlock({ read }: { read: EliteRead }) {
             Market favourite #{read.favourite.number} {read.favourite.name} {money(read.favourite.price)}
           </p>
         ) : null}
+        <BankLine bank={bank} />
       </div>
     );
   }
@@ -1145,7 +1297,23 @@ function EliteBlock({ read }: { read: EliteRead }) {
           ))}
         </ul>
       ) : null}
+      <BankLine bank={bank} win />
     </div>
+  );
+}
+
+function BankLine({ bank, win }: { bank: WeekBook; win?: boolean }) {
+  if (bank.amount == null || bank.unit == null) return null;
+  if (bank.stopped) {
+    return <p className="mt-3 text-sm text-pretty">This week's bank is done. No new stake until Monday.</p>;
+  }
+  return (
+    <p className="mt-3 text-sm text-pretty text-muted">
+      {win
+        ? `If you take the winner alone, the week allows $${bank.unit.toFixed(2)}, not more. `
+        : ""}
+      ${bank.left?.toFixed(2)} of ${bank.amount.toFixed(2)} left this week.
+    </p>
   );
 }
 

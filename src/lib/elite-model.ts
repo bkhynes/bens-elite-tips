@@ -1,4 +1,6 @@
 import type { Race, Runner } from "@/lib/racing-types";
+import { EMPTY_POLICY, type LessonPolicy } from "@/lib/lessons";
+import { sameRaceCard, type SameRaceCard } from "@/lib/same-race";
 
 export type ElitePick = {
   number: number;
@@ -32,6 +34,7 @@ export type EliteRead = {
   reasons: string[];
   concerns: string[];
   model: ModelNote | null;
+  sameRace: SameRaceCard | null;
 };
 
 const WINDOW_MIN = 15;
@@ -95,7 +98,7 @@ type Scored = {
   composite: number;
 };
 
-export function readRace(race: Race, now: number): EliteRead {
+export function readRace(race: Race, now: number, policy: LessonPolicy = EMPTY_POLICY): EliteRead {
   const minutes = (new Date(race.startTime).getTime() - now) / 60000;
   const inWindow = minutes >= -0.25 && minutes <= WINDOW_MIN;
   const active = race.runners.filter((r) => !r.scratched);
@@ -112,6 +115,7 @@ export function readRace(race: Race, now: number): EliteRead {
     reasons: [] as string[],
     concerns: [] as string[],
     model: null as ModelNote | null,
+    sameRace: null as SameRaceCard | null,
   };
 
   if (minutes < -0.5) {
@@ -148,7 +152,7 @@ export function readRace(race: Race, now: number): EliteRead {
   const known = forms.filter((f): f is number => f != null);
   const field = active.length;
 
-  if (known.length / priced.length < 0.45) {
+  if (known.length / priced.length < policy.formCoverage) {
     const fav = [...priced].sort((a, b) => (priceOf(a) as number) - (priceOf(b) as number))[0];
     return {
       ...base,
@@ -161,7 +165,10 @@ export function readRace(race: Race, now: number): EliteRead {
         .slice(0, 4)
         .map((r) => r.number),
       noBetReason:
-        "Form figures are missing on most of the field, so this can't be checked against the market. No bet.",
+        policy.formCoverage > 0.45
+          ? (policy.rules.find((rule) => rule.id === "missed_winner")?.detail ??
+            "Form figures are missing on too much of the field. No bet.")
+          : "Form figures are missing on most of the field, so this can't be checked against the market. No bet.",
     };
   }
 
@@ -205,8 +212,12 @@ export function readRace(race: Race, now: number): EliteRead {
   ) {
     chosen = value;
     tag = "value";
-  } else if (margin < 0.04) {
-    noBet = "The card is split. Form and the market don't separate the top two. No bet.";
+  } else if (margin < policy.splitGap) {
+    noBet =
+      policy.splitGap > 0.04
+        ? (policy.rules.find((rule) => rule.id === "close_card")?.detail ??
+          "The card is split. Form and the market don't separate the top two. No bet.")
+        : "The card is split. Form and the market don't separate the top two. No bet.";
   }
 
   const pickRunner = chosen.runner;
@@ -278,6 +289,33 @@ export function readRace(race: Race, now: number): EliteRead {
     }
   }
 
+  if (!noBet && policy.passShortAgreement && tag === "agreement" && chosen.price < 2.2) {
+    noBet =
+      policy.rules.find((rule) => rule.id === "short_agreement")?.detail ??
+      "Agreement calls under $2.20 have been losing. No bet.";
+  } else if (!noBet && policy.passCheapValue && tag === "value" && chosen.price < 3) {
+    noBet =
+      policy.rules.find((rule) => rule.id === "cheap_value")?.detail ??
+      "Value calls under $3.00 have been losing. No bet.";
+  }
+
+  const sameRace = sameRaceCard({
+    runners: scored.map((row) => ({
+      number: row.runner.number,
+      name: row.runner.name,
+      p: row.fair,
+      price: row.price,
+    })),
+    fieldSize: field,
+    pick: noBet
+      ? null
+      : {
+          number: pickRunner.number,
+          name: pickRunner.name,
+          price: pickRunner.sportsbet ?? chosen.price,
+        },
+  });
+
   return {
     raceId: race.id,
     inWindow,
@@ -310,6 +348,7 @@ export function readRace(race: Race, now: number): EliteRead {
           secondNumber: second.runner.number,
           secondName: second.runner.name,
         },
+    sameRace,
   };
 }
 
@@ -317,9 +356,9 @@ function round3(n: number) {
   return Math.round(n * 1000) / 1000;
 }
 
-export function readsInWindow(races: Race[], now: number): EliteRead[] {
+export function readsInWindow(races: Race[], now: number, policy: LessonPolicy = EMPTY_POLICY): EliteRead[] {
   return races
-    .map((race) => readRace(race, now))
+    .map((race) => readRace(race, now, policy))
     .filter((read) => read.inWindow)
     .sort((a, b) => a.minutes - b.minutes);
 }

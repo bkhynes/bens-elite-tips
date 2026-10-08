@@ -83,7 +83,7 @@ function storedFrom(v: unknown): StoredSuggestion | null {
   return { ...stored, raceId: entry.raceId.slice(0, 80), startTime: start, loggedAt: logged, venue: entry.venue.slice(0, 80) };
 }
 
-export const listSuggestions = createServerFn({ method: "GET" }).handler(async () => {
+export async function loadStoredSuggestions(): Promise<Suggestion[]> {
   const { getSql } = await import("@/lib/db");
   const sql = await getSql();
   const rows = await sql<Record<string, unknown>>`
@@ -93,10 +93,68 @@ export const listSuggestions = createServerFn({ method: "GET" }).handler(async (
            outcome, result_kind, result_source, winner_number, winner_name, pick_position,
            placings, miss_reason, next_time, feed
     from suggestions
-    order by logged_at desc
+    order by start_time desc
     limit 400
   `;
   return rows.map(rowToSuggestion).filter((entry): entry is Suggestion => entry != null);
+}
+
+export async function saveStoredSuggestions(entries: StoredSuggestion[]): Promise<number> {
+  if (!entries.length) return 0;
+  const { getSql } = await import("@/lib/db");
+  const sql = await getSql();
+  let saved = 0;
+  for (const entry of entries) {
+    await sql`
+      insert into suggestions (
+        race_id, venue, race_number, category, country, start_time, logged_at, tag,
+        pick_number, pick_name, price, favourite_number, favourite_name, favourite_price,
+        ranking, market_order, reasons, concerns, model, field,
+        outcome, result_kind, result_source, winner_number, winner_name, pick_position,
+        placings, miss_reason, next_time, feed
+      ) values (
+        ${entry.raceId}, ${entry.venue}, ${entry.raceNumber}, ${entry.category}, ${entry.country},
+        ${entry.startTime}, ${entry.loggedAt}, ${entry.tag},
+        ${entry.pickNumber}, ${entry.pickName}, ${entry.price}, ${entry.favouriteNumber}, ${entry.favouriteName}, ${entry.favouritePrice},
+        ${JSON.stringify(entry.ranking)}::jsonb, ${JSON.stringify(entry.marketOrder)}::jsonb,
+        ${JSON.stringify(entry.reasons)}::jsonb, ${JSON.stringify(entry.concerns)}::jsonb,
+        ${entry.model ? JSON.stringify(entry.model) : null}::jsonb, ${JSON.stringify(entry.field)}::jsonb,
+        ${entry.outcome}, ${entry.resultKind}, ${entry.resultSource}, ${entry.winnerNumber}, ${entry.winnerName}, ${entry.pickPosition},
+        ${JSON.stringify(entry.placings)}::jsonb, ${entry.missReason}, ${entry.nextTime},
+        ${entry.feed ? JSON.stringify(entry.feed) : null}::jsonb
+      )
+      on conflict (race_id) do update set
+        outcome = excluded.outcome,
+        result_kind = excluded.result_kind,
+        result_source = excluded.result_source,
+        winner_number = excluded.winner_number,
+        winner_name = excluded.winner_name,
+        pick_position = excluded.pick_position,
+        placings = excluded.placings,
+        miss_reason = excluded.miss_reason,
+        next_time = excluded.next_time,
+        feed = excluded.feed,
+        model = coalesce(suggestions.model, excluded.model),
+        updated_at = now()
+      where (
+        suggestions.result_source is distinct from 'manual'
+        or excluded.result_source = 'manual'
+      )
+      and not (
+        suggestions.outcome in ('won', 'lost', 'void')
+        and coalesce(suggestions.result_kind, '') = 'final'
+        and excluded.outcome = 'pending'
+      )
+    `;
+    saved += 1;
+  }
+  return saved;
+}
+
+export const listSuggestions = createServerFn({ method: "GET" }).handler(async () => {
+  const { ensureSettler } = await import("@/lib/settle.server");
+  ensureSettler();
+  return loadStoredSuggestions();
 });
 
 export const saveSuggestions = createServerFn({ method: "POST" })
@@ -109,53 +167,6 @@ export const saveSuggestions = createServerFn({ method: "POST" })
     return { suggestions: suggestions.slice(0, 40) };
   })
   .handler(async ({ data }) => {
-    if (!data.suggestions.length) return { saved: 0 };
-    const { getSql } = await import("@/lib/db");
-    const sql = await getSql();
-    let saved = 0;
-    for (const entry of data.suggestions) {
-      await sql`
-        insert into suggestions (
-          race_id, venue, race_number, category, country, start_time, logged_at, tag,
-          pick_number, pick_name, price, favourite_number, favourite_name, favourite_price,
-          ranking, market_order, reasons, concerns, model, field,
-          outcome, result_kind, result_source, winner_number, winner_name, pick_position,
-          placings, miss_reason, next_time, feed
-        ) values (
-          ${entry.raceId}, ${entry.venue}, ${entry.raceNumber}, ${entry.category}, ${entry.country},
-          ${entry.startTime}, ${entry.loggedAt}, ${entry.tag},
-          ${entry.pickNumber}, ${entry.pickName}, ${entry.price}, ${entry.favouriteNumber}, ${entry.favouriteName}, ${entry.favouritePrice},
-          ${JSON.stringify(entry.ranking)}::jsonb, ${JSON.stringify(entry.marketOrder)}::jsonb,
-          ${JSON.stringify(entry.reasons)}::jsonb, ${JSON.stringify(entry.concerns)}::jsonb,
-          ${entry.model ? JSON.stringify(entry.model) : null}::jsonb, ${JSON.stringify(entry.field)}::jsonb,
-          ${entry.outcome}, ${entry.resultKind}, ${entry.resultSource}, ${entry.winnerNumber}, ${entry.winnerName}, ${entry.pickPosition},
-          ${JSON.stringify(entry.placings)}::jsonb, ${entry.missReason}, ${entry.nextTime},
-          ${entry.feed ? JSON.stringify(entry.feed) : null}::jsonb
-        )
-        on conflict (race_id) do update set
-          outcome = excluded.outcome,
-          result_kind = excluded.result_kind,
-          result_source = excluded.result_source,
-          winner_number = excluded.winner_number,
-          winner_name = excluded.winner_name,
-          pick_position = excluded.pick_position,
-          placings = excluded.placings,
-          miss_reason = excluded.miss_reason,
-          next_time = excluded.next_time,
-          feed = excluded.feed,
-          model = coalesce(suggestions.model, excluded.model),
-          updated_at = now()
-        where (
-          suggestions.result_source is distinct from 'manual'
-          or excluded.result_source = 'manual'
-        )
-        and not (
-          suggestions.outcome in ('won', 'lost', 'void')
-          and coalesce(suggestions.result_kind, '') = 'final'
-          and excluded.outcome = 'pending'
-        )
-      `;
-      saved += 1;
-    }
+    const saved = await saveStoredSuggestions(data.suggestions);
     return { saved };
-});
+  });

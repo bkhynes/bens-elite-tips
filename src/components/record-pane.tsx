@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft, ClipboardList } from "lucide-react";
+import type { WeekBook } from "@/lib/bank";
 import {
   profitOf,
   signedMoney,
@@ -16,6 +17,51 @@ const timeFmt = new Intl.DateTimeFormat("en-AU", {
   minute: "2-digit",
   hour12: true,
 });
+
+function WeekBank({ bank, onBank }: { bank: WeekBook; onBank: (amount: number | null) => void }) {
+  const [draft, setDraft] = useState(bank.amount == null ? "" : String(bank.amount));
+  useEffect(() => {
+    setDraft(bank.amount == null ? "" : String(bank.amount));
+  }, [bank.amount]);
+
+  function commit() {
+    const parsed = draft.trim() === "" ? null : Number(draft);
+    if (parsed != null && (!Number.isFinite(parsed) || parsed < 0 || parsed > 1_000_000)) return;
+    onBank(parsed == null || parsed === 0 ? null : Math.round(parsed * 100) / 100);
+  }
+
+  return (
+    <div className="mt-4 rounded-xl border border-line bg-surface p-4">
+      <p className="text-sm tracking-wide text-gold uppercase">This week · {bank.label}</p>
+      <p className="mt-2 text-sm text-pretty text-muted">
+        This is the money you can lose, not a target. One race is 2% of it. Wins go back in. When nothing is left, staking stops until Monday.
+      </p>
+      <label className="mt-3 block text-sm text-muted">
+        Allocated
+        <input
+          inputMode="decimal"
+          value={draft}
+          placeholder="200"
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          className="mt-1 h-11 w-full max-w-xs rounded-xl border border-line bg-bg px-3 text-fg tabular-nums"
+        />
+      </label>
+      {bank.amount == null ? (
+        <p className="mt-3 text-sm text-muted">Set it for this week. Monday starts again from zero, and last week's amount does not carry over.</p>
+      ) : bank.stopped ? (
+        <p className="mt-3 text-sm">This week's bank is done. No new stake until Monday.</p>
+      ) : (
+        <p className="mt-3 text-sm">
+          <span className="text-gold tabular-nums">${bank.left?.toFixed(2)}</span> left of ${bank.amount.toFixed(2)}
+          {bank.pending ? ` · $${bank.pending.toFixed(2)} still at risk` : ""}
+          {bank.unit ? ` · unit $${bank.unit.toFixed(2)}` : ""}
+          {bank.settled ? ` · settled ${signedMoney(bank.settled)}` : ""}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function codeLabel(category: string) {
   if (category === "horse") return "Thoroughbred";
@@ -42,6 +88,8 @@ export function RecordPane({
   onClearManual,
   onNewPhase,
   onCheck,
+  bank,
+  onBank,
 }: {
   entries: Suggestion[];
   phaseStartedAt: string;
@@ -55,6 +103,8 @@ export function RecordPane({
   onClearManual: (raceId: string) => void;
   onNewPhase: () => void;
   onCheck: () => void;
+  bank: WeekBook;
+  onBank: (amount: number | null) => void;
 }) {
   const [earlier, setEarlier] = useState(false);
   const [armPhase, setArmPhase] = useState(false);
@@ -81,8 +131,10 @@ export function RecordPane({
       </button>
       <h1 className="font-display text-3xl">Book</h1>
       <p className="mt-2 max-w-prose text-sm text-pretty text-muted">
-        Every suggestion inside 15 minutes is stored, whether you bet it or not, and it stays after you leave. A stake is only for the ones you actually take, and that stays on this phone.
+        Every suggestion inside 15 minutes is stored. The point is to stay in the game: small stakes, a cover when you want the bigger price, and a hard stop when the week's bank is gone.
       </p>
+
+      <WeekBank bank={bank} onBank={onBank} />
 
       <div className="mt-4 rounded-xl border border-line bg-surface p-4">
         <p className="text-sm tracking-wide text-gold uppercase">Suggestions this phase</p>
