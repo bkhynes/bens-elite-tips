@@ -1,1 +1,0 @@
-import{n as e,r as t,t as n}from"./index-CIpA5dRO.js";var r=t();function i(){let t=n.useLoaderData();return(0,r.jsx)(e,{initial:t})}export{i as component};

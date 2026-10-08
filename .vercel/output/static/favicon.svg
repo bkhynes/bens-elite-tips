@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="7" fill="#10140f"/>
-  <rect x="6.75" y="4.75" width="18.5" height="22.5" rx="1.75" fill="#f4f0e4"/>
-  <path d="M6.75 6.5c0-.97.78-1.75 1.75-1.75h15c.97 0 1.75.78 1.75 1.75V8H6.75V6.5z" fill="#e0b15a"/>
-  <path d="M8 9.5h6.6L8 17.6V9.5z" fill="#1a221c"/>
-  <polygon points="15.4,13.7 18.5,10.9 18.5,14.2" fill="#10140f"/>
-  <rect x="18.5" y="10.9" width="2.55" height="11.3" fill="#10140f"/>
-  <rect x="15.5" y="20.5" width="7.7" height="2.35" fill="#10140f"/>
-</svg>
