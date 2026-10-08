@@ -153,44 +153,38 @@ function asResearch(text: string): RaceResearch | null {
 async function researchFromWeb(data: NonNullable<ReturnType<typeof compactRace>>): Promise<RaceResearch> {
   const active = data.runners.filter((r) => !r.scratched);
   const names = active.map((r) => r.name).filter(Boolean);
-  const query = [data.venue, `race ${data.raceNumber}`, data.category, "tips", names.slice(0, 3).join(" ")]
-    .filter(Boolean)
-    .join(" ");
+  const query = [data.venue, `race ${data.raceNumber}`, "tips", names.slice(0, 2).join(" ")].filter(Boolean).join(" ");
   const sources: RaceResearch["sources"] = [];
   const hits: string[] = [];
   try {
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; BensEliteTips/1.0)" },
-      signal: AbortSignal.timeout(12_000),
+    const searchUrl = `https://r.jina.ai/http://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const res = await fetch(searchUrl, {
+      headers: { Accept: "text/plain", "User-Agent": "BensEliteTips/1.0" },
+      signal: AbortSignal.timeout(18_000),
     });
     if (res.ok) {
-      const html = await res.text();
-      const blocks = html.split('class="result').slice(1, 8);
-      for (const block of blocks) {
-        const title = decode(block.match(/class="result__a"[^>]*>(.*?)<\/a>/s)?.[1] ?? "");
-        const snippet = decode(block.match(/class="result__snippet"[^>]*>(.*?)<\/(?:a|td|div)>/s)?.[1] ?? "");
-        const blob = `${title} ${snippet}`;
-        if (!blob.trim()) continue;
+      const page = await res.text();
+      const lines = page.split("\n").map((line) => line.trim()).filter(Boolean);
+      for (let i = 0; i < lines.length && sources.length < 4; i++) {
+        const line = lines[i];
+        if (!/^\[.+\]\(http/.test(line) && !line.startsWith("http")) continue;
+        const title = line.replace(/\[(.*)\].*/, "$1").slice(0, 80);
+        const href = (line.match(/\((https?:[^)]+)\)/)?.[1] ?? line).toLowerCase();
+        const around = lines.slice(i, i + 3).join(" ");
+        const blob = `${title} ${around}`;
         const mentioned = names.filter((name) => blob.toLowerCase().includes(name.toLowerCase()));
-        if (!mentioned.length && !blob.toLowerCase().includes(data.venue.toLowerCase())) continue;
-        const host = (block.match(/uddg=([^&"]+)/)?.[1] ?? "").toLowerCase();
-        const name = /racenet/.test(host)
-          ? "Racenet"
-          : /punters/.test(host)
-            ? "Punters"
-            : /racingandsports|racing-and-sports/.test(host)
-              ? "Racing and Sports"
-              : /justhorse/.test(host)
-                ? "Just Horse Racing"
-                : title.slice(0, 42) || "Search result";
-        sources.push({ name, selection: mentioned[0] ?? snippet.slice(0, 80) });
+        const venueHit = blob.toLowerCase().includes(data.venue.toLowerCase());
+        if (!mentioned.length && !venueHit) continue;
+        if (/duckduckgo|jina\.ai/.test(href)) continue;
+        sources.push({
+          name: sourceName(href, title),
+          selection: mentioned[0] ?? title.slice(0, 80),
+        });
         hits.push(blob);
-        if (sources.length >= 4) break;
       }
     }
   } catch {
-    // search failed; fall through to a card-only read
+    // search failed; card-only read below
   }
 
   const counts = new Map<string, number>();
@@ -204,14 +198,12 @@ async function researchFromWeb(data: NonNullable<ReturnType<typeof compactRace>>
   const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
   const top = ranked[0];
   const runner = top ? active.find((r) => r.name === top[0]) : undefined;
-  const verified = sources.length >= 2 && runner;
+  const verified = sources.length >= 2 && Boolean(runner);
   const ranking = verified
-    ? ranked
-        .map(([name]) => active.find((r) => r.name === name)?.number)
-        .filter((n): n is number => typeof n === "number")
+    ? ranked.map(([name]) => active.find((r) => r.name === name)?.number).filter((n): n is number => typeof n === "number")
     : active.slice().sort((a, b) => (a.sportsbet ?? 999) - (b.sportsbet ?? 999)).map((r) => r.number).slice(0, 4);
 
-  if (!verified) {
+  if (!verified || !runner || !top) {
     return {
       noBet: true,
       pickNumber: null,
@@ -219,13 +211,13 @@ async function researchFromWeb(data: NonNullable<ReturnType<typeof compactRace>>
       confidence: "low",
       sources: sources.slice(0, 4),
       consensus: sources.length
-        ? "Outside pages came back, but not two that clearly discuss this race."
+        ? "Outside pages came back, but not two that clearly name a runner in this race."
         : "No independent tip page could be checked for this race.",
       synthesis: "No bet. The card read still stands. This pass did not invent a tipster or a price.",
-      reasons: ["Outside research ran without a live model key, so only pages that name this race count."],
+      reasons: ["Only a page that names this race counts."],
       concerns: ["Fewer than two verified sources."],
       ranking,
-      cardOnly: true,
+      cardOnly: sources.length < 2,
     };
   }
 
@@ -233,28 +225,24 @@ async function researchFromWeb(data: NonNullable<ReturnType<typeof compactRace>>
     noBet: false,
     pickNumber: runner.number,
     pickName: runner.name,
-    confidence: top[1] >= 3 ? "medium" : "low",
+    confidence: top[1] >= 2 ? "medium" : "low",
     sources: sources.slice(0, 4),
     consensus: `${runner.name} is the name showing up most on the pages that mention this race.`,
     synthesis: `Outside pages lean ${runner.name}. Sportsbet ${runner.sportsbet ?? "—"} is the price that matters. Still your bet.`,
     reasons: [`Named on ${top[1]} result${top[1] === 1 ? "" : "s"}.`],
-    concerns: ["This is a page match, not a sectional or a steward read."],
+    concerns: ["Page match only. Not a sectional or a steward read."],
     ranking,
     cardOnly: false,
   };
 }
 
-function decode(value: string) {
-  return value
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&/g, "&")
-    .replace(/"/g, '"')
-    .replace(/&#39;|'/g, "'")
-    .replace(/</g, "<")
-    .replace(/>/g, ">")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function sourceName(href: string, title: string) {
+  if (href.includes("racenet")) return "Racenet";
+  if (href.includes("punters.com")) return "Punters";
+  if (href.includes("racingandsports") || href.includes("racing-and-sports")) return "Racing and Sports";
+  if (href.includes("justhorse")) return "Just Horse Racing";
+  if (href.includes("racing.com")) return "Racing.com";
+  return title.replace(/\s+/g, " ").slice(0, 42) || "Search result";
 }
 
 export const researchRace = createServerFn({ method: "POST" })
